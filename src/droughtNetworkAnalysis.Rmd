@@ -1,0 +1,246 @@
+---
+title: "drought Network Analysis"
+author: "Alonso Serrano"
+date: "8/14/2019"
+output: 
+  html_document: 
+    number_sections: yes
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#knitr::opts_knit$set(root.dir="/mnt/picea/home/aserrano/drought")
+```
+
+# Introduction
+This file contains the script and results for the clustering and enrichment of the drought network
+from Julia Hass drought analysis. 
+
+## Prerequisites
+
+Dataset with variance stabilization transformation applied
+Dataset metadata
+Aggregated network file from Seidr
+Backbone file obtained from the aggregated network file
+
+
+## Setup
+First we load the modules and auxiliary scripts 
+```{r ini}
+library(here)
+library(RLinuxModules)
+library(data.table)
+module("load bioinfo-tools seidr-devel")
+module("load bioinfo-tools InfoMap")
+
+source(here("Rtoolbox/src/infomapTools.R"))
+source(here("Rtoolbox/src/plotEnrichedTreemap.R"))
+source(here("Rtoolbox/src/plotEigenGene.R"))
+source(here("Rtoolbox/src/plotEnrichedTreemap.R"))
+
+projectDir <- "/mnt/picea/projects/spruce/vhurry/drought-stress-combined/"
+deDir <- paste0(projectDir, "de/")
+networkDir <- paste0(projectDir, "network/")
+
+```
+
+```{r loadData, include=F}
+load(paste0(deDir, "combinedData.RData"))
+```
+
+Load the drought vst data obtained from Julia's analysis
+```{r, eval=FALSE}
+combinedData <- read.table(paste0(deDir,"vsdDrought.tsv"), header=T, row.names = 1, sep='\t')
+combinedData <- as.matrix(combinedData)
+```
+
+Load the metadata and delete sample 15, to be coherent with the paper.
+On the droughtAUC.R file, we have seen that the best backbone we can use is the 1%. 
+That is on the backbone-1-percent.sf file and the algorithm that we will use is the irp_score.
+Now we define those parameters, as well as the edge file and the names of the files that will come after Infomap.
+
+```{r load}
+meta <- read.csv(here("doc","droughtcombined.csv"))
+meta <- meta[-15,]
+#seidrExe <- ("/mnt/picea/home/bastian/Git/seidr-devel/build/seidr ")
+seidrExe <- ("seidr ")
+backboneFile <- paste0(networkDir, "results/backbone/backbone-1-percent.sf")
+clusterFolder <- paste0(networkDir, "cluster/")
+dir.create(clusterFolder, showWarnings = FALSE)
+algo <- "irp_score"
+edgeFile <- paste0(clusterFolder,"edgeList.txt")
+edgeIndexFile <- paste0(clusterFolder,"edgeIndexList.txt")
+treeFile <- paste0(clusterFolder,"edgeIndexList.tree")
+
+```
+
+# Infomap clustering
+First we use Seidr reheader function to drop not connected nodes and improve efficiency
+```{r reheader, results=F, message='HIDE'}
+system(paste(seidrExe, "reheader" , backboneFile), intern=TRUE)
+
+```
+
+We execute seidr view to extract the information of source node, target node and the score of irp
+```{r include=FALSE}
+
+headResult <- system(paste(seidrExe, "view", backboneFile, "-c -d $'\t' ", "| head -n 1"), intern=TRUE)
+headResult <- unlist(strsplit(headResult, "\t"))
+
+algoIndex <- grep("irp_score", headResult)
+system(paste0(seidrExe, "view ", backboneFile, "  -d $'\t' | cut -f 1,2,",algoIndex, " > ",edgeFile), intern=TRUE)
+system(paste0(seidrExe, "view ", backboneFile, " -N -d $'\t' | cut -f 1,2,",algoIndex," >",edgeIndexFile), intern=TRUE)
+
+```
+
+We will execute Infomap with a markov-time value of 1.4, because that value matches our goal to 
+keeps between 50-60% of the genes in the top 20 clusters.
+```{r infomap, results=F, message='HIDE'}
+markovTime <- 1.4
+system(paste("Infomap ", edgeIndexFile," -z --markov-time ", markovTime," ", clusterFolder))
+infomapRes <- system(paste0(seidrExe, " resolve -s ", backboneFile, " ", treeFile), intern=TRUE)
+infomapTable <-data.frame(do.call(rbind, strsplit(infomapRes, "\t")))
+infomapTable <- prepareData(infomapTable)
+infomapTable$Level1 <- infomapTable$P1
+infomapTable$Level2 <- paste0(infomapTable$Level1,":",infomapTable$P2)
+infomapTable$Level2 <- ifelse(infomapTable$Level2 %like% "NA", NA, infomapTable$Level2)  
+```
+
+We can get some information about the quality of the clusters
+```{r qa1}
+print(paste("% of genes in the top 20 clusters in Level 1:", clusterQA(infomapTable)))
+print(paste("% of genes in the top 20 clusters in Level 2:", clusterQA(infomapTable, level='Level2')))
+
+```
+
+We select those clusters that at least has 40 genes. Our goal is to obtain between 25-35 clusters
+```{r}
+selectedClusters <- getClusterByMinSize(infomapTable, level = 'Level2',min=40)
+
+topClusters <- getClusters(infomapTable, "Level2", numberOfClusters=selectedClusters)
+```
+
+Then we save the results of clustering for network visualization
+```{r save4Cytoscape, eval=F}
+save4Cytoscape(topClusters, file=paste0(clusterFolder,"InfomapClusters.tsv"))
+save4Cytoscape(topClusters, file=here("results", "InfomapClusters.tsv"))
+```
+
+# Enrichment
+
+We use as background all genes that at least have 1 count in any condition of the dataset, we only remove 
+genes with absolute zero expression. this information was extracted after the DE analysis but before 
+removing the zero MAD genes
+```{r gofer}
+background <- read.table(paste0(deDir, "background.txt"), stringsAsFactors = F, header=F)[[1]]
+```
+
+We use gofer2 to obtain all the enrichments for each cluster. GO, pfam, KEGG and Mapman.
+By default we filter all the terms above 0.05 of pAdj value
+```{r, eval=FALSE}
+clusterEnr <- enrichClusters(topClusters, background = background)
+save(paste0(clusterFolder, "clusterEnr.RData"))
+```
+
+```{r loadEnr, include=FALSE}
+load(paste0(clusterFolder, "clusterEnr.RData"))
+```
+
+We save the enrichment data to XLS files for future uses.
+```{r save, eval=FALSE}
+enr2xls(clusterEnr, filePrefix = paste0(clusterFolder,"drought" ) )
+```
+
+# Plots
+
+In order to get a proper plot, we need to specify the correct order of levels
+```{r relevel}
+meta$Level <- factor(meta$Level, levels = c("80%", "60%", "40%", "30%", "30%7d", "Collapse", "C2d", "Rehydrate") )
+```
+
+We plot the top 15 clusters expression profiles and GO biological process enrichment treemap.
+```{r plot, message=FALSE, results="asis"}
+for (clus in 1:15) {
+  
+  clusName <- names(topClusters)[clus]
+  cat(paste0("<H3>", clusName, "","</H3>"))
+  cat("\n\n")
+  print(plotEigengene(combinedData, topClusters[[clusName]],                      
+                meta$Type, meta$Level, timeUnits = "Level",    
+                noLegend = F, legendTitle="Tissue",
+                title = paste(clusName,"Genes:",length(topClusters[[clusName]]) )))
+  cat("\n")
+  enr <- clusterEnr[[clusName]][['go']]
+  if (!is.null(enr) && any(enr$namespace =='BP')) {
+    plotEnrichedTreemap(clusterEnr[[clusName]], enrichment = 'go', namespace = 'BP',
+                        clusterColor=clusterTreemapColors[clus],
+                        clusterText=clusterTreemapText[clus],
+                        title = paste(clusName," GO enrichment for BP"))
+  }
+  cat("\n")
+  cat("<hr>")
+  enr <- clusterEnr[[clusName]][['mapman']]
+
+  if (!is.null(enr)) {
+    plotEnrichedTreemap(clusterEnr[[clusName]], enrichment = 'mapman',
+                      clusterColor=clusterTreemapColors[clus],
+                      clusterText=clusterTreemapText[clus],
+                      title = paste(clusName," MAPMAN enrichment"))
+  }
+  cat("\n")
+  cat("<hr>")
+  
+}
+```
+
+
+# Export results
+We can save each plot as a PNG for 
+```{r, eval=FALSE}
+for (clus in 1:length(topClusters)) {
+  print(names(topClusters)[clus])
+  thisCluster <- names(topClusters)[clus]
+  png(paste0("expressionProfiles/",thisCluster,".png" ), width = 1482, height=571 )
+  print(plotEigengene(combinedData, topClusters[[thisCluster]], 
+                      meta$Type, 
+                      meta$Level, 
+                      timeUnits = "Level",    
+                      noLegend = F,
+                      legendTitle="Tissue",
+                      title = paste(thisCluster,"Genes:",length(topClusters[[thisCluster]]) )))
+  dev.off()
+  
+}
+
+```
+
+```{r saveEnr, eval=FALSE}
+for (clus in 1:15) {
+ 
+  clusName <- names(topClusters)[clus]
+   print(clusName)
+  png(paste0("clusterTreemaps/",clusName,"_enr_","go_bp",".png" ), width = 1482, height=571 )
+  
+  enr <- clusterEnr[[clusName]][['go']]
+  if (!is.null(enr)) {
+    
+
+    plotEnrichedTreemap(clusterEnr[[clusName]], enrichment = 'go', 
+                        namespace = 'BP',
+                        clusterColor=clusterTreemapColors[clus],
+                        clusterText=clusterTreemapText[clus])
+  }
+  dev.off()
+}
+```
+
+# Session information
+Seidr version 0.11.0
+
+Infomap version 0.19.26
+
+
+```{r}
+sessionInfo()
+```

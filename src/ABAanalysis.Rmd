@@ -1,0 +1,196 @@
+---
+title: "ABA analysis"
+author: "Alonso Serrano"
+date: "7/10/2019"
+updated: "21/01/2020"
+output: 
+  html_document: 
+    number_sections: yes
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#knitr::opts_knit$set(root.dir="/mnt/picea/home/aserrano/drought")
+```
+
+# Introduction
+Plot ABA related genes, their infomap clusters (if any) and general information
+
+## Prerequisites
+
+Dataset with variance stabilization transformation applied
+Dataset metadata
+Infomap clusters
+Table with DE gene results
+
+
+## Setup
+Load the modules and auxiliary scripts 
+```{r ini}
+library(here)
+library(dplyr)
+#library(plyr)
+source(here("Rtoolbox/src/infomapTools.R"))
+source(here("Rtoolbox/src/plotEnrichedTreemap.R"))
+source(here("Rtoolbox/src/plotEigenGene.R"))
+source(here("Rtoolbox/src/plotEnrichedTreemap.R"))
+
+projectDir <- "/mnt/picea/projects/spruce/vhurry/drought-stress-combined"
+deDir <- file.path(projectDir, "de")
+networkDir <- file.path(projectDir, "network")
+
+```
+
+Load the drought vst data obtained from Julia's analysis
+```{r loadData, include=F}
+load(file.path(deDir, "combinedData.RData"))
+```
+
+Load the drought vst data obtained from Julia's analysis
+```{r, eval=FALSE}
+combinedData <- read.table(file.path(deDir,"vsdDrought.tsv"), 
+                           header=T, row.names = 1, sep='\t')
+combinedData <- as.matrix(combinedData)
+```
+```{r metadata}
+meta <- read.csv(here("doc","droughtcombined.csv"))
+meta <- meta[-15,]
+meta$Level <- factor(meta$Level, levels = c("80%", "60%", "40%", "30%", "30%7d", "Collapse", "C2d", "Rehydrate") )
+
+meta$days <- plyr::mapvalues(meta$Level, 
+          from=c("80%", "60%", "40%", "30%", "30%7d", "Collapse", "C2d", "Rehydrate"), 
+          to=c(0,2,4,5,13,18,21,25))
+
+meta$days <- as.numeric(as.character(meta$days))
+
+meta$points <- plyr::mapvalues(meta$Level, 
+          from=c("80%", "60%", "40%", "30%", "30%7d", "Collapse", "C2d", "Rehydrate"), 
+          to=c("Control", "2 Days", "4 Days", "5 Days",
+                                            "13 Days", "18 Days", "21 Days","Re-irrigation"))
+
+```
+
+```{r loadBigTable, include=FALSE}
+bigTable <- read.table(file.path(projectDir, "results", "table1_infomap_stats.tsv"),
+                       sep='\t', header=T, stringsAsFactors = F, comment.char = "",
+                       quote="")
+bigTable[is.na(bigTable$infomapCluster),]$infomapCluster <- "noCluster"
+```
+
+```{r loadABAlist}
+# 
+# table1 <- read.table("~/Git/drought-combined-network/doc/table1.tsv", 
+#                      sep='\t', comment.char = "", header=T,
+#                      stringsAsFactors=FALSE, quote="")
+
+ABAlistTable <- read.table(here("doc","ABAsublist.tsv"), sep='\t', 
+                      header = T,fill=T, quote="", stringsAsFactors = F)
+
+genesOI <- ABAlistTable$Congenie.Norway.spruce.ID
+
+ABAlistTemp <- bigTable[bigTable$Congenie.Norway.spruce.ID %in% genesOI,]
+
+ABAlist <- data.frame(Congenie.Norway.spruce.ID = ABAlistTemp$Congenie.Norway.spruce.ID, 
+                      Tair.Arabidopsis.ID = ABAlistTemp$Tair.Arabidopsis.ID,
+                      Tairinfo = ABAlistTemp$Tairinfo,
+                      Nickname = ABAlistTemp$Nickname,
+                      infomapCluster = ABAlistTemp$infomapCluster,
+                      stringsAsFactors = F) 
+ABAlist <- distinct(ABAlist)
+```
+
+
+```{r loadInfomap}
+infomapClusters <- read.table(file.path(networkDir, "cluster/InfomapClusters.tsv"),
+                              header=T,stringsAsFactors = F)
+names(infomapClusters) <- c("gene", "infomapCluster")
+```
+
+```{r mergeTables, eval=FALSE}
+# ABAlist <- left_join(ABAlist , infomapClusters, by = "Congenie.Norway.spruce.ID")
+# ABAlist[is.na(ABAlist$infomapCluster),]$infomapCluster <- "noCluster"
+```
+
+# Cluster index
+```{r addIndex, message=FALSE, echo=F, results="asis"}
+
+lapply(unique(ABAlist$infomapCluster), function (clus){
+  cat(paste0("<a href=\"#",clus,"\">",clus,"</a>"))
+  cat("\n\n")
+})
+
+```
+
+
+```{r, message=FALSE, results="asis"}
+
+narrowGeneList <- read.table(here("src","narrowGeneList.tsv"), quote="\"", comment.char="", stringsAsFactors=FALSE)[,1]
+
+miniPrint <- function(genes) {
+  for(gen in genes) {
+    #if (gen %in% narrowGeneList) {
+      
+      thisData <- ABAlist[ABAlist$Congenie.Norway.spruce.ID==gen,]
+      cat("<H3>Gene</H3>")
+      cat("\n\n")
+      cat(gen)
+      cat("\n\n")
+      for(id in thisData$Tair.Arabidopsis.ID){
+        thisRow <- thisData[thisData$Tair.Arabidopsis.ID==id,]
+        cat("<H5>Tair Arabidopsis ID</H5>")
+        cat("\n\n")
+        cat(thisRow$Tair.Arabidopsis.ID)
+        cat("<H5>Tairinfo</H5>")
+        cat("\n\n")
+        cat(thisRow$Tairinfo)
+        cat("\n\n")
+        cat("<H5>Nickname</H5>")
+        cat("\n\n")
+        cat(thisRow$Nickname)
+        cat("\n\n")
+      }
+      cat("<H5>Plot</H5>")
+      cat("\n\n")
+      if(gen %in% colnames(combinedData)){
+        print(plotEigengene(combinedData, gen, meta$Type, meta$days, timeUnits = "Days",    
+                noLegend = F, legendTitle="Tissue"))
+        cat("\n\n")
+      } else {
+        cat("NO DATA AVAILABLE")
+        cat("\n\n")
+      }
+      cat("<hr>")
+      cat("<hr>")
+      #}
+    }
+    
+}
+
+#a full list
+for (cluster in unique(ABAlist$infomapCluster)) {
+#a narrow list
+#for (cluster in c("noCluster", "Cluster1:2", "Cluster1:10", "Cluster1:5", "Cluster1:7")) {  
+  cat(paste0("<a name=\"",cluster,"\"></a><H2>",cluster,"</H2>"))
+  cat("\n\n")
+  
+  if(cluster!="noCluster") {
+    fullCluster <- infomapClusters[infomapClusters$infomapCluster==cluster,]$gene
+    print(plotEigengene(combinedData, fullCluster, meta$Type, meta$days, timeUnits = "Days",    
+                noLegend = F, legendTitle="Tissue"))
+    cat("\n\n")
+  }
+  
+  temp <- ABAlist[ABAlist$infomapCluster==cluster,]$Congenie.Norway.spruce.ID
+  
+  if(cluster=="noCluster") {
+    temp <- intersect(temp, narrowGeneList)
+  }
+  miniPrint(temp)
+  cat("\n\n")
+  cat("<hr>")
+
+}
+```
+
+
