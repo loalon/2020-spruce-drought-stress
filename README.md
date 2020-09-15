@@ -2,6 +2,11 @@
  
 Julia C. Haas, Alexander Vergara, Alonso R. Serrano, Sanatkumar Mishra, Vaughan Hurry, Nathaniel R. Street.
 
+## Data exploratory tool
+http://terra.upsc.se/2020-spruce-drought-stress/
+
+https://loalon.shinyapps.io/2020-spruce-drought-stress/
+
 ## Repository content:
 
 /doc - samples meta data.
